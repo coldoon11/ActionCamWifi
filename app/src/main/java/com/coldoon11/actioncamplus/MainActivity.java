@@ -7,6 +7,7 @@ import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.ConnectivityManager;
+import android.net.LinkAddress;
 import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -35,7 +36,6 @@ import java.io.OutputStream;
 import java.net.Inet4Address;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -185,6 +185,13 @@ public final class MainActivity extends Activity {
     }
 
     private void connectCamera() {
+        Network existing = findExistingWifiNetwork();
+        if (existing != null) {
+            setStatus("Нашёл уже подключённый Wi‑Fi. Использую его напрямую…");
+            bindAndConnect(existing, true);
+            return;
+        }
+
         if (!hasWifiPermission()) {
             if (Build.VERSION.SDK_INT >= 33) {
                 requestPermissions(new String[]{Manifest.permission.NEARBY_WIFI_DEVICES}, PERMISSION_REQUEST);
@@ -196,12 +203,54 @@ public final class MainActivity extends Activity {
         requestCameraNetwork();
     }
 
+    private Network findExistingWifiNetwork() {
+        try {
+            for (Network network : connectivity.getAllNetworks()) {
+                NetworkCapabilities caps = connectivity.getNetworkCapabilities(network);
+                if (caps == null || !caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue;
+                LinkProperties props = connectivity.getLinkProperties(network);
+                if (props == null) continue;
+                for (LinkAddress address : props.getLinkAddresses()) {
+                    if (address.getAddress() instanceof Inet4Address) {
+                        return network;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private void bindAndConnect(Network network, boolean alreadyConnected) {
+        closeClient();
+        cameraNetwork = network;
+        boolean bound = connectivity.bindProcessToNetwork(network);
+        LinkProperties props = connectivity.getLinkProperties(network);
+        String gateway = gatewayFrom(props);
+        String localIp = localIpFrom(props);
+        String prefix = alreadyConnected ? "Использую подключённый Wi‑Fi" : "Wi‑Fi подключён";
+        setStatus(prefix + ". Телефон " + localIp + ", шлюз " + gateway
+                + ". Ищу камеру на TCP 8081…");
+        io.execute(() -> connectProtocol(network, gateway, localIp));
+    }
+
+    private String localIpFrom(LinkProperties props) {
+        if (props != null) {
+            for (LinkAddress address : props.getLinkAddresses()) {
+                if (address.getAddress() instanceof Inet4Address) {
+                    return address.getAddress().getHostAddress();
+                }
+            }
+        }
+        return "?";
+    }
+
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
         if (requestCode == PERMISSION_REQUEST) {
             if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
-                requestCameraNetwork();
+                connectCamera();
             } else {
                 setStatus("Без разрешения Android не даст приложению подключиться к Wi‑Fi камеры.");
             }
@@ -227,11 +276,7 @@ public final class MainActivity extends Activity {
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override
             public void onAvailable(Network network) {
-                cameraNetwork = network;
-                connectivity.bindProcessToNetwork(network);
-                String gateway = gatewayFrom(connectivity.getLinkProperties(network));
-                setStatus("Wi‑Fi подключён. Ищу Generalplus TCP 8081…");
-                io.execute(() -> connectProtocol(gateway));
+                bindAndConnect(network, false);
             }
 
             @Override
@@ -264,30 +309,51 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void connectProtocol(String gateway) {
+    private void connectProtocol(Network network, String gateway, String localIp) {
         try {
-            String host = GeneralPlusClient.firstReachableHost(Arrays.asList(
-                    gateway, "192.168.25.1", "192.168.1.1", "192.168.0.1"
-            ));
-            if (host == null) throw new Exception("TCP 8081 камеры не найден");
+            ArrayList<String> candidates = new ArrayList<>();
+            candidates.add(gateway);
+            candidates.add("192.168.25.1");
+            candidates.add("192.168.1.1");
+            candidates.add("192.168.0.1");
+            candidates.add("192.168.99.1");
+            candidates.add("192.168.42.1");
+            candidates.add("10.0.0.1");
 
-            GeneralPlusClient c = new GeneralPlusClient(host);
+            if (localIp != null && localIp.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) {
+                int dot = localIp.lastIndexOf('.');
+                if (dot > 0) {
+                    String subnet = localIp.substring(0, dot + 1);
+                    candidates.add(subnet + "1");
+                    candidates.add(subnet + "2");
+                    candidates.add(subnet + "254");
+                }
+            }
+
+            String host = GeneralPlusClient.firstReachableHost(
+                    network.getSocketFactory(), candidates);
+            if (host == null) {
+                throw new Exception("TCP 8081 не найден. Телефон=" + localIp + ", шлюз=" + gateway);
+            }
+
+            GeneralPlusClient c = new GeneralPlusClient(host, network.getSocketFactory());
             c.connect();
             closeClient();
             client = c;
 
             main.post(() -> {
-                cameraInfo.setText(CAMERA_SSID + "  •  " + host + ":8081");
+                cameraInfo.setText(CAMERA_SSID + "  •  " + host + ":8081"
+                        + "  •  телефон " + localIp);
                 connectButton.setEnabled(true);
                 setControls(true);
-                setStatus("Камера подключена. Читаю карту памяти…");
+                setStatus("Камера отвечает по Generalplus. Читаю карту памяти…");
             });
             refreshFilesInternal();
         } catch (Throwable t) {
             main.post(() -> {
                 connectButton.setEnabled(true);
                 setControls(false);
-                setStatus("Не удалось подключиться к камере: " + friendly(t));
+                setStatus("Wi‑Fi найден, но камера не отвечает: " + friendly(t));
             });
         }
     }

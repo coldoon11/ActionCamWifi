@@ -35,10 +35,13 @@ public final class GeneralPlusClient {
     private static final int RECORD_START_STOP = 0x00;
     private static final int CAPTURE = 0x00;
 
+    private static final int PB_START = 0x00;
+    private static final int PB_PAUSE = 0x01;
     private static final int PB_FILE_COUNT = 0x02;
     private static final int PB_NAME_LIST = 0x03;
     private static final int PB_THUMBNAIL = 0x04;
     private static final int PB_RAW_DATA = 0x05;
+    private static final int PB_STOP = 0x06;
     private static final int PB_DELETE = 0x08;
 
     private static final int[] AUTH_LUT = {
@@ -215,6 +218,21 @@ public final class GeneralPlusClient {
             out.write(packet.payload);
         }
         return out.toByteArray();
+    }
+
+    public void startPlayback(CameraFile file) throws IOException {
+        ensureConnected();
+        transact(MODE_PLAYBACK, PB_START, le16(file.deviceIndex));
+    }
+
+    public void pausePlayback(CameraFile file) throws IOException {
+        ensureConnected();
+        transact(MODE_PLAYBACK, PB_PAUSE, new byte[]{(byte) file.extCode});
+    }
+
+    public void stopPlayback(CameraFile file) throws IOException {
+        ensureConnected();
+        transact(MODE_PLAYBACK, PB_STOP, new byte[]{(byte) file.extCode});
     }
 
     public void delete(CameraFile file) throws IOException {

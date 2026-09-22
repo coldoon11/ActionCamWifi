@@ -121,7 +121,7 @@ public final class MainActivity extends Activity {
         root.addView(row2);
 
         TextView hint = new TextView(this);
-        hint.setText("Нажми на файл — скачать. Долгое нажатие — удалить с карты камеры.");
+        hint.setText("Нажми на видео — смотреть без скачивания. В меню можно скачать MP4 или удалить.");
         hint.setPadding(0, dp(10), 0, dp(6));
         root.addView(hint);
 
@@ -137,7 +137,7 @@ public final class MainActivity extends Activity {
         recordButton.setOnClickListener(v -> toggleRecord());
         photoButton.setOnClickListener(v -> capturePhoto());
         liveButton.setOnClickListener(v -> openLive());
-        list.setOnItemClickListener((parent, view, position, id) -> downloadFile(files.get(position)));
+        list.setOnItemClickListener((parent, view, position, id) -> openFile(files.get(position)));
         list.setOnItemLongClickListener((parent, view, position, id) -> {
             confirmDelete(files.get(position));
             return true;
@@ -171,10 +171,10 @@ public final class MainActivity extends Activity {
     }
 
     private void setControls(boolean connected) {
-        refreshButton.setEnabled(connected);
-        recordButton.setEnabled(connected);
-        photoButton.setEnabled(connected);
-        liveButton.setEnabled(connected);
+        refreshButton.setEnabled(connected && !downloading);
+        recordButton.setEnabled(connected && !downloading);
+        photoButton.setEnabled(connected && !downloading);
+        liveButton.setEnabled(connected && !downloading);
     }
 
     private boolean hasWifiPermission() {

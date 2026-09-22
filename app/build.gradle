@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace 'com.coldoon11.actioncamplus'
-    compileSdk 35
+    compileSdk 36
 
     defaultConfig {
         applicationId 'com.coldoon11.actioncamplus'

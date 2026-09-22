@@ -407,6 +407,20 @@ public final class MainActivity extends Activity {
         });
     }
 
+    private void openFile(GeneralPlusClient.CameraFile file) {
+        if (client == null || downloading) return;
+        FileActions.show(
+                this,
+                client,
+                file,
+                io,
+                main,
+                this::setStatus,
+                () -> downloadFile(file),
+                () -> confirmDelete(file)
+        );
+    }
+
     private void toggleRecord() {
         if (client == null || downloading) return;
         setStatus(recording ? "Останавливаю запись…" : "Запускаю запись…");

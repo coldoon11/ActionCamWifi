@@ -24,6 +24,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Cache debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: actioncamplus-debug-keystore-v1
+
       - name: Install Android SDK 35
         run: |
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"

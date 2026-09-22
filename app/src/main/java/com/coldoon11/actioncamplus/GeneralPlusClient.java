@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Random;
 
+import javax.net.SocketFactory;
+
 public final class GeneralPlusClient {
     public static final int PORT = 8081;
 
@@ -47,21 +49,24 @@ public final class GeneralPlusClient {
     public final String host;
     public final String streamRtsp;
 
+    private final SocketFactory socketFactory;
     private Socket socket;
     private BufferedInputStream input;
     private BufferedOutputStream output;
 
-    public GeneralPlusClient(String host) {
+    public GeneralPlusClient(String host, SocketFactory socketFactory) {
         this.host = host;
+        this.socketFactory = socketFactory != null ? socketFactory : SocketFactory.getDefault();
         this.streamRtsp = "rtsp://" + host + ":8080/?action=stream";
     }
 
-    public static String firstReachableHost(List<String> hosts) {
+    public static String firstReachableHost(SocketFactory socketFactory, List<String> hosts) {
+        SocketFactory factory = socketFactory != null ? socketFactory : SocketFactory.getDefault();
         LinkedHashSet<String> unique = new LinkedHashSet<>(hosts);
         for (String host : unique) {
             if (host == null || host.trim().isEmpty()) continue;
-            try (Socket probe = new Socket()) {
-                probe.connect(new InetSocketAddress(host, PORT), 900);
+            try (Socket probe = factory.createSocket()) {
+                probe.connect(new InetSocketAddress(host, PORT), 1000);
                 return host;
             } catch (IOException ignored) {
             }
@@ -71,10 +76,10 @@ public final class GeneralPlusClient {
 
     public void connect() throws IOException {
         disconnect();
-        Socket s = new Socket();
+        Socket s = socketFactory.createSocket();
         s.setTcpNoDelay(true);
         s.setKeepAlive(true);
-        s.connect(new InetSocketAddress(host, PORT), 3500);
+        s.connect(new InetSocketAddress(host, PORT), 4000);
         s.setSoTimeout(10000);
         socket = s;
         input = new BufferedInputStream(s.getInputStream(), 64 * 1024);

@@ -343,6 +343,7 @@ public final class MainActivity extends Activity {
 
             main.post(() -> {
                 cameraInfo.setText(CAMERA_SSID + "  •  " + host + ":8081"
+                        + "  •  " + (c.isRtspSupported() ? "RTSP" : "HTTP")
                         + "  •  телефон " + localIp);
                 connectButton.setEnabled(true);
                 setControls(true);
@@ -423,16 +424,46 @@ public final class MainActivity extends Activity {
 
     private void toggleRecord() {
         if (client == null || downloading) return;
-        setStatus(recording ? "Останавливаю запись…" : "Запускаю запись…");
+
+        final boolean stopping = recording;
+        setStatus(stopping ? "Останавливаю и сохраняю запись…" : "Запускаю запись…");
+
         io.execute(() -> {
             try {
-                client.setRecordMode();
-                client.toggleRecording();
-                recording = !recording;
-                main.post(() -> {
-                    recordButton.setText(recording ? "Стоп запись" : "Запись");
-                    setStatus(recording ? "Идёт запись." : "Запись остановлена.");
-                });
+                if (!stopping) {
+                    // В оригинальном Generalplus клиенте режим выбирается перед стартом записи.
+                    // На STOP режим повторно не переключаем: это может оборвать финализацию файла.
+                    client.setRecordMode();
+                    Thread.sleep(250);
+                    client.restartStreaming();
+                    Thread.sleep(200);
+                    client.toggleRecording();
+                    recording = true;
+
+                    main.post(() -> {
+                        recordButton.setText("Стоп запись");
+                        setStatus("Идёт запись на карту камеры.");
+                    });
+                } else {
+                    // Только Record/Stop, без повторного SetMode.
+                    client.toggleRecording();
+                    recording = false;
+
+                    // Камере нужно время дописать индекс/заголовок видео на SD.
+                    Thread.sleep(1200);
+
+                    main.post(() -> {
+                        recordButton.setText("Запись");
+                        setStatus("Запись остановлена и финализирована. Обновляю список…");
+                    });
+
+                    try {
+                        refreshFilesInternal();
+                    } catch (Throwable listError) {
+                        main.post(() -> setStatus(
+                                "Запись сохранена, но список не обновился: " + friendly(listError)));
+                    }
+                }
             } catch (Throwable t) {
                 main.post(() -> setStatus("Запись: " + friendly(t)));
             }
@@ -461,13 +492,14 @@ public final class MainActivity extends Activity {
             try {
                 client.setRecordMode();
                 client.restartStreaming();
-                Uri uri = Uri.parse(client.streamRtsp);
+                Uri uri = Uri.parse(client.playbackStreamUrl());
                 main.post(() -> {
                     try {
                         startActivity(new Intent(Intent.ACTION_VIEW, uri));
-                        setStatus("Live-view открыт через видеоплеер телефона.");
+                        setStatus("Live-view открыт. Поток: "
+                                + (client.isRtspSupported() ? "RTSP" : "HTTP") + ".");
                     } catch (Throwable t) {
-                        setStatus("RTSP поток готов: " + uri + " — нужен плеер с RTSP (например VLC).");
+                        setStatus("Поток камеры: " + uri);
                     }
                 });
             } catch (Throwable t) {

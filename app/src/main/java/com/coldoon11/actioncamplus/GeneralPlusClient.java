@@ -29,6 +29,7 @@ public final class GeneralPlusClient {
     private static final int MODE_PLAYBACK = 0x03;
 
     private static final int CMD_SET_MODE = 0x00;
+    private static final int CMD_GET_STATUS = 0x01;
     private static final int CMD_RESTART_STREAM = 0x04;
     private static final int CMD_AUTH = 0x05;
 
@@ -51,7 +52,10 @@ public final class GeneralPlusClient {
 
     public final String host;
     public final String streamRtsp;
+    public final String streamHttp;
 
+    private volatile boolean rtspSupported = false;
+    private volatile boolean statusKnown = false;
     private final SocketFactory socketFactory;
     private Socket socket;
     private BufferedInputStream input;
@@ -61,6 +65,7 @@ public final class GeneralPlusClient {
         this.host = host;
         this.socketFactory = socketFactory != null ? socketFactory : SocketFactory.getDefault();
         this.streamRtsp = "rtsp://" + host + ":8080/?action=stream";
+        this.streamHttp = "http://" + host + ":8080/?action=stream";
     }
 
     public static String firstReachableHost(SocketFactory socketFactory, List<String> hosts) {
@@ -88,6 +93,12 @@ public final class GeneralPlusClient {
         input = new BufferedInputStream(s.getInputStream(), 64 * 1024);
         output = new BufferedOutputStream(s.getOutputStream(), 64 * 1024);
         authenticate();
+        try {
+            refreshDeviceStatus();
+        } catch (IOException ignored) {
+            statusKnown = false;
+            rtspSupported = false;
+        }
     }
 
     public void disconnect() {
@@ -121,6 +132,27 @@ public final class GeneralPlusClient {
 
     public void restartStreaming() throws IOException {
         transact(MODE_GENERAL, CMD_RESTART_STREAM, new byte[0]);
+    }
+
+    public DeviceStatus refreshDeviceStatus() throws IOException {
+        Packet packet = transact(MODE_GENERAL, CMD_GET_STATUS, new byte[0]);
+        if (packet.payload.length < 4) {
+            throw new IOException("Короткий ответ статуса камеры");
+        }
+        rtspSupported = (packet.payload[2] & 0x80) != 0;
+        statusKnown = true;
+        int mode = packet.payload[0] & 0xff;
+        int battery = packet.payload[2] & 0x7f;
+        boolean canDelete = (packet.payload[3] & 0x80) != 0;
+        return new DeviceStatus(mode, battery, rtspSupported, canDelete);
+    }
+
+    public boolean isRtspSupported() {
+        return statusKnown && rtspSupported;
+    }
+
+    public String playbackStreamUrl() {
+        return isRtspSupported() ? streamRtsp : streamHttp;
     }
 
     public List<CameraFile> listFiles() throws IOException {
@@ -159,8 +191,10 @@ public final class GeneralPlusClient {
                 if (off + 13 > packet.payload.length) break;
 
                 byte[] p = packet.payload;
+                char extCode = (char) (p[off] & 0xff);
                 CameraFile f = new CameraFile(
-                        (char) (p[off] & 0xff),
+                        extCode,
+                        extensionFor(extCode),
                         u16(p, off + 1),
                         2000 + (p[off + 3] & 0xff),
                         p[off + 4] & 0xff,
@@ -341,6 +375,29 @@ public final class GeneralPlusClient {
         }
     }
 
+    private String extensionFor(char extCode) {
+        if (extCode == 'J') return "jpg";
+        if (extCode == 'V' || extCode == 'K' || extCode == 'O') return "avi";
+        if (extCode == 'A' || extCode == 'L' || extCode == 'S') {
+            return isRtspSupported() ? "mov" : "avi";
+        }
+        return "bin";
+    }
+
+    public static final class DeviceStatus {
+        public final int mode;
+        public final int battery;
+        public final boolean rtsp;
+        public final boolean canDelete;
+
+        DeviceStatus(int mode, int battery, boolean rtsp, boolean canDelete) {
+            this.mode = mode;
+            this.battery = battery;
+            this.rtsp = rtsp;
+            this.canDelete = canDelete;
+        }
+    }
+
     private static byte[] le16(int value) {
         return new byte[]{(byte) (value & 0xff), (byte) ((value >>> 8) & 0xff)};
     }
@@ -374,6 +431,7 @@ public final class GeneralPlusClient {
 
     public static final class CameraFile {
         public final char extCode;
+        public final String extension;
         public final int deviceIndex;
         public final int year;
         public final int month;
@@ -383,9 +441,10 @@ public final class GeneralPlusClient {
         public final int second;
         public final long sizeKb;
 
-        CameraFile(char extCode, int deviceIndex, int year, int month, int day,
+        CameraFile(char extCode, String extension, int deviceIndex, int year, int month, int day,
                    int hour, int minute, int second, long sizeKb) {
             this.extCode = extCode;
+            this.extension = extension;
             this.deviceIndex = deviceIndex;
             this.year = year;
             this.month = month;
@@ -401,9 +460,7 @@ public final class GeneralPlusClient {
         }
 
         public String guessedExtension() {
-            if (extCode == 'J') return "jpg";
-            if (extCode == 'V' || extCode == 'K' || extCode == 'O') return "avi";
-            return "mov";
+            return extension;
         }
 
         public String displayName() {

@@ -3,6 +3,8 @@ package com.coldoon11.actioncamplus;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.os.Handler;
+import android.view.View;
+import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -26,49 +28,86 @@ public final class FileActions {
             Runnable downloadOriginal,
             Runnable deleteFile
     ) {
-        if (file.isImage()) {
-            new AlertDialog.Builder(activity)
-                    .setTitle(file.displayName())
-                    .setMessage(file.details())
-                    .setItems(new String[]{
-                            "Скачать фото",
-                            "Удалить с карты камеры",
-                            "Отмена"
-                    }, (dialog, which) -> {
-                        if (which == 0) downloadOriginal.run();
-                        if (which == 1) deleteFile.run();
-                    })
-                    .show();
-            return;
+        int d = Math.round(activity.getResources().getDisplayMetrics().density);
+
+        LinearLayout box = new LinearLayout(activity);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(20 * d, 10 * d, 20 * d, 8 * d);
+
+        TextView details = new TextView(activity);
+        details.setText(file.details());
+        details.setTextSize(15);
+        details.setPadding(0, 0, 0, 12 * d);
+        box.addView(details, new LinearLayout.LayoutParams(-1, -2));
+
+        Button primary = actionButton(activity,
+                file.isImage() ? "⬇ Скачать фото" : "▶ Смотреть без скачивания");
+        box.addView(primary, fullWidth());
+
+        Button download = null;
+        if (!file.isImage()) {
+            download = actionButton(activity, "⬇ Скачать как MP4");
+            box.addView(download, fullWidth());
         }
 
-        new AlertDialog.Builder(activity)
+        Button delete = actionButton(activity, "🗑 Удалить с карты камеры");
+        box.addView(delete, fullWidth());
+
+        Button cancel = actionButton(activity, "Отмена");
+        box.addView(cancel, fullWidth());
+
+        AlertDialog dialog = new AlertDialog.Builder(activity)
                 .setTitle(file.displayName())
-                .setMessage(file.details())
-                .setItems(new String[]{
-                        "▶ Смотреть без скачивания",
-                        "⬇ Скачать как MP4",
-                        "🗑 Удалить с карты камеры",
-                        "Отмена"
-                }, (dialog, which) -> {
-                    if (which == 0) {
-                        CameraVideoPlayer.show(
-                                activity,
-                                client,
-                                file,
-                                io,
-                                main,
-                                status::setStatus,
-                                () -> downloadMp4(activity, client, file, io, main, status),
-                                deleteFile
-                        );
-                    } else if (which == 1) {
-                        downloadMp4(activity, client, file, io, main, status);
-                    } else if (which == 2) {
-                        deleteFile.run();
-                    }
-                })
-                .show();
+                .setView(box)
+                .create();
+
+        if (file.isImage()) {
+            primary.setOnClickListener(v -> {
+                dialog.dismiss();
+                downloadOriginal.run();
+            });
+        } else {
+            primary.setOnClickListener(v -> {
+                dialog.dismiss();
+                CameraVideoPlayer.show(
+                        activity,
+                        client,
+                        file,
+                        io,
+                        main,
+                        status::setStatus,
+                        () -> downloadMp4(activity, client, file, io, main, status),
+                        deleteFile
+                );
+            });
+
+            download.setOnClickListener(v -> {
+                dialog.dismiss();
+                downloadMp4(activity, client, file, io, main, status);
+            });
+        }
+
+        delete.setOnClickListener(v -> {
+            dialog.dismiss();
+            deleteFile.run();
+        });
+
+        cancel.setOnClickListener(v -> dialog.dismiss());
+        dialog.show();
+    }
+
+    private static Button actionButton(Activity activity, String text) {
+        Button button = new Button(activity);
+        button.setText(text);
+        button.setAllCaps(false);
+        return button;
+    }
+
+    private static LinearLayout.LayoutParams fullWidth() {
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
     }
 
     private static void downloadMp4(
@@ -125,7 +164,7 @@ public final class FileActions {
                     new AlertDialog.Builder(activity)
                             .setTitle("MP4 сохранён")
                             .setMessage(saved
-                                    + "\n\nЭто уже не AVI — файл должен отображаться в обычной галерее Android.")
+                                    + "\n\nФайл сохранён как MP4 и должен отображаться в обычной галерее Android.")
                             .setPositiveButton("OK", null)
                             .show();
                 });

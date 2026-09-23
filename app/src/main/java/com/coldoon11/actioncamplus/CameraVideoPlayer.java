@@ -2,18 +2,20 @@ package com.coldoon11.actioncamplus;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.net.Uri;
 import android.os.Handler;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import androidx.media3.common.MediaItem;
-import androidx.media3.common.PlaybackException;
-import androidx.media3.common.Player;
-import androidx.media3.exoplayer.ExoPlayer;
-import androidx.media3.ui.PlayerView;
+import org.videolan.libvlc.LibVLC;
+import org.videolan.libvlc.Media;
+import org.videolan.libvlc.MediaPlayer;
+import org.videolan.libvlc.util.VLCVideoLayout;
 
+import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class CameraVideoPlayer {
     private CameraVideoPlayer() {}
@@ -33,16 +35,18 @@ public final class CameraVideoPlayer {
             Runnable deleteFile
     ) {
         int density = Math.round(activity.getResources().getDisplayMetrics().density);
+        AtomicBoolean closed = new AtomicBoolean(false);
+
         LinearLayout box = new LinearLayout(activity);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(8 * density, 8 * density, 8 * density, 8 * density);
 
-        PlayerView playerView = new PlayerView(activity);
-        box.addView(playerView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 260 * density));
+        VLCVideoLayout videoLayout = new VLCVideoLayout(activity);
+        box.addView(videoLayout, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 280 * density));
 
         TextView note = new TextView(activity);
-        note.setText("Видео идёт напрямую с SD-карты камеры по Wi‑Fi — без скачивания.");
+        note.setText("Подключаю поток камеры…");
         note.setPadding(4 * density, 8 * density, 4 * density, 4 * density);
         box.addView(note);
 
@@ -51,15 +55,26 @@ public final class CameraVideoPlayer {
 
         Button download = new Button(activity);
         download.setText("Скачать MP4");
+        download.setAllCaps(false);
+
         Button delete = new Button(activity);
         delete.setText("Удалить");
+        delete.setAllCaps(false);
 
         actions.addView(download, new LinearLayout.LayoutParams(0, -2, 1f));
         actions.addView(delete, new LinearLayout.LayoutParams(0, -2, 1f));
         box.addView(actions);
 
-        ExoPlayer player = new ExoPlayer.Builder(activity).build();
-        playerView.setPlayer(player);
+        ArrayList<String> options = new ArrayList<>();
+        options.add("--network-caching=120");
+        options.add("--clock-jitter=0");
+        options.add("--clock-synchro=0");
+        options.add("--no-drop-late-frames");
+        options.add("--no-skip-frames");
+
+        LibVLC libVLC = new LibVLC(activity, options);
+        MediaPlayer player = new MediaPlayer(libVLC);
+        player.attachViews(videoLayout, null, false, false);
 
         AlertDialog dialog = new AlertDialog.Builder(activity)
                 .setTitle(file.displayName())
@@ -67,11 +82,20 @@ public final class CameraVideoPlayer {
                 .setNegativeButton("Закрыть", null)
                 .create();
 
-        player.addListener(new Player.Listener() {
-            @Override
-            public void onPlayerError(PlaybackException error) {
-                status.setStatus("Плеер: " + error.getErrorCodeName()
-                        + ". Закрой окно и попробуй ещё раз.");
+        player.setEventListener(event -> {
+            if (closed.get()) return;
+            if (event.type == MediaPlayer.Event.Playing) {
+                main.post(() -> {
+                    note.setText("▶ Воспроизведение прямо с камеры");
+                    status.setStatus("Видео воспроизводится прямо с камеры.");
+                });
+            } else if (event.type == MediaPlayer.Event.EncounteredError) {
+                main.post(() -> {
+                    note.setText("Поток камеры не открылся");
+                    status.setStatus("Ошибка видеопотока. Тип: "
+                            + (client.isRtspSupported() ? "RTSP" : "HTTP")
+                            + ". Попробуй закрыть и открыть ролик ещё раз.");
+                });
             }
         });
 
@@ -86,31 +110,56 @@ public final class CameraVideoPlayer {
         });
 
         dialog.setOnShowListener(d -> {
-            status.setStatus("Открываю " + file.displayName() + " с камеры…");
-            try {
-                player.setMediaItem(MediaItem.fromUri(client.streamRtsp));
-                player.prepare();
-                player.setPlayWhenReady(true);
+            status.setStatus("Переключаю камеру в режим просмотра " + file.displayName() + "…");
+            io.execute(() -> {
+                try {
+                    client.setPlaybackMode();
+                    client.restartStreaming();
+                    String url = client.playbackStreamUrl();
 
-                main.postDelayed(() -> io.execute(() -> {
-                    try {
-                        client.setPlaybackMode();
-                        client.restartStreaming();
-                        client.startPlayback(file);
-                        main.post(() -> status.setStatus(
-                                "Видео воспроизводится прямо с камеры."));
-                    } catch (Throwable t) {
-                        main.post(() -> status.setStatus(
-                                "Камера не запустила видео: " + friendly(t)));
-                    }
-                }), 500);
-            } catch (Throwable t) {
-                status.setStatus("Плеер: " + friendly(t));
-            }
+                    main.post(() -> {
+                        if (closed.get()) return;
+                        note.setText("Поток: " + (client.isRtspSupported() ? "RTSP" : "HTTP"));
+
+                        Media media = new Media(libVLC, Uri.parse(url));
+                        media.setHWDecoderEnabled(true, false);
+                        media.addOption(":network-caching=120");
+                        media.addOption(":live-caching=120");
+                        media.addOption(":file-caching=120");
+                        player.setMedia(media);
+                        media.release();
+                        player.play();
+
+                        main.postDelayed(() -> {
+                            if (closed.get()) return;
+                            io.execute(() -> {
+                                try {
+                                    client.startPlayback(file);
+                                } catch (Throwable t) {
+                                    main.post(() -> {
+                                        note.setText("Камера отклонила запуск ролика");
+                                        status.setStatus("Playback: " + friendly(t));
+                                    });
+                                }
+                            });
+                        }, 300);
+                    });
+                } catch (Throwable t) {
+                    main.post(() -> {
+                        note.setText("Не удалось подготовить поток");
+                        status.setStatus("Playback: " + friendly(t));
+                    });
+                }
+            });
         });
 
         dialog.setOnDismissListener(d -> {
-            player.release();
+            closed.set(true);
+            try { player.stop(); } catch (Throwable ignored) {}
+            try { player.detachViews(); } catch (Throwable ignored) {}
+            try { player.release(); } catch (Throwable ignored) {}
+            try { libVLC.release(); } catch (Throwable ignored) {}
+
             io.execute(() -> {
                 try {
                     client.stopPlayback(file);

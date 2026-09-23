@@ -104,6 +104,7 @@ public final class VideoMp4Downloader {
     }
 
     private static void convert(File input, File output) throws Exception {
+        // 1) Самый быстрый путь: перепаковать дорожки без потери качества.
         String remux = "-y -i " + q(input)
                 + " -map 0:v:0? -map 0:a:0? -c copy -movflags +faststart " + q(output);
         FFmpegSession remuxSession = FFmpegKit.execute(remux);
@@ -114,14 +115,31 @@ public final class VideoMp4Downloader {
 
         if (output.exists()) output.delete();
 
+        // 2) Частый случай экшн-камер: H.264 совместим с MP4, а звук в AVI/MOV — нет.
+        // Видео оставляем оригинальным, перекодируем только аудио в AAC.
+        String audioFix = "-y -i " + q(input)
+                + " -map 0:v:0? -map 0:a:0?"
+                + " -c:v copy -c:a aac -b:a 160k"
+                + " -movflags +faststart " + q(output);
+        FFmpegSession audioSession = FFmpegKit.execute(audioFix);
+        if (ReturnCode.isSuccess(audioSession.getReturnCode())
+                && output.exists() && output.length() > 1024) {
+            return;
+        }
+
+        if (output.exists()) output.delete();
+
+        // 3) Совместимый запасной вариант, если исходный видеокодек нельзя положить в MP4.
         String transcode = "-y -i " + q(input)
                 + " -map 0:v:0? -map 0:a:0?"
-                + " -c:v mpeg4 -q:v 3 -c:a aac -b:a 160k"
+                + " -c:v mpeg4 -q:v 3 -pix_fmt yuv420p"
+                + " -c:a aac -b:a 160k"
                 + " -movflags +faststart " + q(output);
         FFmpegSession transcodeSession = FFmpegKit.execute(transcode);
         if (!ReturnCode.isSuccess(transcodeSession.getReturnCode())
                 || !output.exists() || output.length() < 1024) {
-            throw new Exception("FFmpeg не смог преобразовать видео камеры в MP4");
+            throw new Exception("FFmpeg не смог преобразовать видео в MP4 (код "
+                    + transcodeSession.getReturnCode() + ")");
         }
     }
 
@@ -138,6 +156,8 @@ public final class VideoMp4Downloader {
             return "avi";
         }
         if (n >= 12 && "ftyp".equals(ascii.substring(4, 8))) {
+            String brand = ascii.substring(8, 12);
+            if ("qt  ".equals(brand)) return "mov";
             return "mp4";
         }
         return "avi";
